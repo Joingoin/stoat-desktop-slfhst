@@ -1,6 +1,6 @@
 import { IUpdateInfo, updateElectronApp } from "update-electron-app";
 
-import { BrowserWindow, Notification, app, shell } from "electron";
+import { BrowserWindow, Notification, app, shell, desktopCapturer, session, ipcMain } from "electron";
 import started from "electron-squirrel-startup";
 
 import { autoLaunch } from "./native/autoLaunch";
@@ -42,6 +42,42 @@ if (acquiredLock) {
   app.on("ready", () => {
     // create window and application contexts
     createMainWindow();
+
+    // FORCE DEVTOOLS TO OPEN
+    // mainWindow.webContents.openDevTools({ mode: 'detach' });
+
+    // --- CUSTOM SCREEN PICKER LOGIC ---
+    mainWindow.webContents.session.setDisplayMediaRequestHandler((request, callback) => {
+      console.log("Screen share requested! Fetching sources...");
+      
+      desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 } })
+        .then((sources) => {
+          const serializedSources = sources.map(s => ({
+            id: s.id,
+            name: s.name,
+            thumbnail: s.thumbnail.toDataURL()
+          }));
+
+          console.log(`Found ${sources.length} sources. Sending to renderer...`);
+
+          // FIXED: Just use mainWindow directly!
+          mainWindow.webContents.send('show-screen-picker', serializedSources);
+
+          ipcMain.once('screen-picker-result', (event, sourceId) => {
+            console.log("Renderer replied with source ID:", sourceId);
+            if (sourceId) {
+              const selectedSource = sources.find(s => s.id === sourceId);
+              callback({ video: selectedSource, audio: 'loopback' });
+            } else {
+              callback(null as any); 
+            }
+          });
+        }).catch(err => {
+          console.error("Failed to get sources:", err);
+          callback(null as any);
+        });
+    }, { useSystemPicker: false });
+    // -----------------------------------
 
     // enable auto start on Windows and MacOS
     if (config.firstLaunch) {
